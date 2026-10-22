@@ -8,7 +8,7 @@
 
 #include <Arduino.h>
 
-#define FW_VERSION "1.0.0"
+#define FW_VERSION "1.1.0"
 #define DEV_MODEL  "PICO-RELAY-B"
 
 // 繼電器經光耦合 + 電晶體驅動，GPIO 拉 HIGH 吸合。
@@ -34,7 +34,7 @@
 #define BUZZER_MAX_MS  5000
 #define BOOT_BEEP_MS   60    // 0 = 開機不叫
 
-// WS2812 很刺眼，治具上只要看得出顏色就好。
+// WS2812 很刺眼，治具上只要看得出顏色就好。開機預設值，主機可用 LEDB 指令改。
 #define LED_BRIGHTNESS 24    // 0~255
 
 // 指令行的長度上限（含指令與參數，不含結尾換行）。

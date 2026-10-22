@@ -6,13 +6,13 @@
 需要 pyserial：
     pip install pyserial
 
-測試內容（約 70 秒，前半自動驗證、後半需要人眼／耳朵確認）：
+測試內容（實測約 52 秒，前半自動驗證、後半需要人眼／耳朵確認）：
     Phase 0  識別、PING、選用檢查碼的正反例
     Phase 1  CH1~CH8 逐路開關兩輪（每路吸合 350ms）
     Phase 2  MASK / ALL 整組控制，順便量 ON 邊緣錯開時間
     Phase 3  PULSE 自動釋放
     Phase 4  蜂鳴器：三短音 + 一長音
-    Phase 5  狀態燈五種狀態 + 閒置看門狗 + USB 斷線保護
+    Phase 5  狀態燈五種狀態 + LED/LEDB 顏色控制 + 閒置看門狗 + USB 斷線保護
 
 ⚠ 本測試會真的驅動 8 路繼電器（包含一次 8 路全開）。執行前請確認接在
   繼電器上的負載可以安全地反覆通斷，或先把負載拆掉只留空接點。
@@ -102,7 +102,7 @@ d.drain(0.6)
 log("=== Phase 0：識別 ===")
 r, ms = d.cmd("ID")
 log(f"ID    -> {r}  ({ms:.1f}ms)")
-check("ID 格式", r.startswith("OK PICO-RELAY-B 8 FW1.0.0 "), True)
+check("ID 格式", r.startswith("OK PICO-RELAY-B 8 FW1.1.0 "), True)
 r, ms = d.cmd("PING")
 log(f"PING  -> {r}  ({ms:.1f}ms round-trip)")
 check("PING", r, "OK PONG")
@@ -198,7 +198,51 @@ for bad in ("OPEN 1", "ON 9", "ON 3x"):
 check("錯誤後狀態不變", d.cmd("GET")[0], "OK 00")
 time.sleep(0.8)
 
-log("(4) 紅色閃爍＝閒置看門狗觸發（開 WDT 2，吸合 4 路後故意不理它）")
+log("(4) LED 指令指定顏色：紅 → 綠 → 藍 → 白，各 1.2 秒")
+check("LED 預設是 AUTO", d.cmd("LED")[0], "OK AUTO")
+for name, code in (("紅", "FF0000"), ("綠", "00FF00"), ("藍", "0000FF"), ("白", "FFFFFF")):
+    check(f"LED {name}", d.cmd(f"LED {code}")[0], f"OK {code}")
+    log(f"  LED {code}（{name}）")
+    time.sleep(1.2)
+check("LED 查詢回指定值", d.cmd("LED")[0], "OK FFFFFF")
+
+log("  亮度：24（預設）→ 120 → 6 → 24，白燈應明顯變亮再變暗")
+check("LEDB 預設值", d.cmd("LEDB")[0], "OK 24")
+for level in (120, 6, 24):
+    check(f"LEDB {level}", d.cmd(f"LEDB {level}")[0], f"OK {level}")
+    log(f"  LEDB {level}")
+    time.sleep(1.0)
+
+log("  LED OFF＝主機要它暗著（1 秒）")
+check("LED OFF", d.cmd("LED OFF")[0], "OK 000000")
+time.sleep(1.0)
+
+log("  指定顏色期間吸合 CH1：燈應維持紫色，不會變成黃色")
+check("LED 紫", d.cmd("LED FF00FF")[0], "OK FF00FF")
+check("指定顏色時 ON 1", d.cmd("ON 1")[0], "OK 01")
+check("ON 不改變指定顏色", d.cmd("LED")[0], "OK FF00FF")
+time.sleep(1.5)
+
+log("  錯誤參數：紅燈閃一下，指定的顏色與亮度都不受影響")
+for bad, want in (("LED 1000000", "ERR 3 RANGE"),
+                  ("LED GG0000", "ERR 3 RANGE"),
+                  ("LED FF0000 00FF00", "ERR 2 BAD_ARG"),
+                  ("LEDB 256", "ERR 3 RANGE")):
+    r, _ = d.cmd(bad)
+    log(f"  {bad:18s} -> {r}")
+    check(f"{bad} 被拒", r, want)
+    time.sleep(0.5)
+check("錯誤後顏色不變", d.cmd("LED")[0], "OK FF00FF")
+check("錯誤後亮度不變", d.cmd("LEDB")[0], "OK 24")
+
+log("  LED AUTO：交還給韌體，CH1 仍吸合所以應轉黃燈")
+check("LED AUTO", d.cmd("LED AUTO")[0], "OK AUTO")
+time.sleep(1.5)
+check("AUTO 後 ALL 0", d.cmd("ALL 0")[0], "OK 00")
+log("  已全部釋放，燈應回綠色")
+time.sleep(1.0)
+
+log("(5) 紅色閃爍＝閒置看門狗觸發（開 WDT 2，吸合 4 路後故意不理它）")
 check("WDT 2", d.cmd("WDT 2")[0], "OK 2")
 check("MASK 0F", d.cmd("MASK 0F")[0], "OK 0F")
 log("  4 路吸合中，2 秒後應該聽到繼電器全部釋放…")
@@ -214,8 +258,10 @@ log("  已下 PING，紅燈應恢復綠色")
 check("WDT 關閉", d.cmd("WDT 0")[0], "OK 0")
 time.sleep(1.5)
 
-log("(5) 藍色閃爍＝USB 斷線保護（吸合 4 路後直接關閉連接埠）")
+log("(6) 藍色閃爍＝USB 斷線保護（吸合 4 路、指定燈色後直接關閉連接埠）")
 check("斷線前 MASK 0F", d.cmd("MASK 0F")[0], "OK 0F")
+# 斷線時主機指定的燈色要自動回 AUTO，否則看不到藍閃（見 PROTOCOL.md §10.1）。
+check("斷線前 LED 指定色", d.cmd("LED 00FFFF")[0], "OK 00FFFF")
 time.sleep(0.8)
 log("  關閉連接埠（放掉 DTR）→ 應聽到繼電器釋放、燈轉藍閃")
 d.ser.close()
@@ -233,12 +279,17 @@ else:
 r, _ = d.cmd("GET")
 check("斷線期間已全部釋放", r, "OK 00")
 log(f"  GET -> {r}（斷線時已全部釋放）")
+check("斷線後 LED 回 AUTO", d.cmd("LED")[0], "OK AUTO")
 
 # ---------- 收尾 ----------
 log("=== 收尾 ===")
+check("LED/LEDB 改過再 RST", d.cmd("LED 123456")[0], "OK 123456")
+check("LEDB 改過再 RST", d.cmd("LEDB 200")[0], "OK 200")
 check("RST", d.cmd("RST")[0], "OK 00")
 check("STAG 預設", d.cmd("STAG")[0], "OK 5")
 check("WDT 預設", d.cmd("WDT")[0], "OK 0")
+check("RST 後 LED 預設", d.cmd("LED")[0], "OK AUTO")
+check("RST 後 LEDB 預設", d.cmd("LEDB")[0], "OK 24")
 d.cmd("BEEP 150")
 d.ser.close()
 

@@ -9,6 +9,9 @@ Waveshare **Pico-Relay-B (SKU 20218)** + Raspberry Pi Pico 的通用 8 路繼電
 ```
 >> ON 1            >> MASK 0F         >> PULSE 3 500     >> WDT 5
 << OK 01           << OK 0F           << OK 04           << OK 5
+
+>> LED 00FF00      >> LEDB 80         >> LED AUTO
+<< OK 00FF00       << OK 80           << OK AUTO
 ```
 
 一行指令一行回應，回應一律帶 8 路狀態（2 位 hex，bit0 = CH1），主機不必自己記帳。
@@ -18,7 +21,7 @@ Waveshare **Pico-Relay-B (SKU 20218)** + Raspberry Pi Pico 的通用 8 路繼電
 | 項目 | 腳位 |
 |---|---|
 | CH1 … CH8 | GP21, GP20, GP19, GP18, GP17, GP16, GP15, GP14（拉 HIGH 吸合，已實機確認） |
-| RGB LED (WS2812) | GP13（`NEO_GRB`，已實機確認顏色） |
+| RGB LED (WS2812) | GP13（`NEO_GRB`，已實機確認顏色；主機可用 `LED` 指令指定顏色） |
 | 蜂鳴器 | GP6（2.7kHz 硬體 PWM 驅動，不佔 PIO） |
 
 ⚠ 8 路 SRD-05VDC 線圈各約 70mA，全開接近 600mA，超過 USB 2.0 單埠上限。韌體已內建
@@ -40,8 +43,8 @@ pip install pyserial
 python tools/hwtest.py COM5          # Linux: python tools/hwtest.py /dev/ttyACM0
 ```
 
-約 70 秒跑完 66 項檢查：完整指令表、錯誤處理、`PULSE` 計時、檢查碼、ON 錯開時間、
-三層失效保護，以及狀態燈與蜂鳴器（這兩項要人眼／耳朵確認，腳本會用三短音提示你開始看板子）。
+約 52 秒跑完 94 項檢查：完整指令表、錯誤處理、`PULSE` 計時、檢查碼、ON 錯開時間、
+三層失效保護，以及狀態燈（含 `LED`／`LEDB` 顏色與亮度）與蜂鳴器（這些要人眼／耳朵確認，腳本會用三短音提示你開始看板子）。
 全部通過時 exit code 為 0，可以直接接進 CI 或產線流程。
 
 ⚠ 測試會真的驅動 8 路繼電器（包含一次 8 路全開），執行前確認負載可安全反覆通斷。
@@ -68,10 +71,18 @@ python tools/hwtest.py COM5          # Linux: python tools/hwtest.py /dev/ttyACM
 | [src/main.cpp](src/main.cpp) | 主迴圈、USB 連線狀態偵測、硬體看門狗 |
 | [tools/hwtest.py](tools/hwtest.py) | 實機回歸測試（pyserial） |
 
-狀態燈：藍閃＝未連線、綠＝連線待命、黃＝有通道吸合、紅閃一下＝指令錯誤、紅閃＝看門狗觸發。
+狀態燈（自動顯示）：藍閃＝未連線、綠＝連線待命、黃＝有通道吸合、紅閃一下＝指令錯誤、紅閃＝看門狗觸發。
+
+主機也可以用 `LED rrggbb` 把這顆燈拿去當自己的指示（治具的測試中／PASS／FAIL），`LED AUTO` 交還給韌體，
+`LEDB n` 調整亮度。失效保護紅閃、斷線藍閃與錯誤閃紅永遠蓋過指定的顏色 —— 治具出事時一定看得出來。
+細節與優先序見 [docs/PROTOCOL.md §10.1](docs/PROTOCOL.md)。
 
 ## 狀態
 
 `FW1.0.0` 已實機驗證（2026-10-21，uid `E6605838836C7639`）：66 項檢查全過，涵蓋完整指令表、
 錯誤處理、`PULSE` 計時、檢查碼、三層失效保護、狀態燈與蜂鳴器。實測單路指令 round-trip 0.3～0.5ms、8 路全開 34.9ms（含 7 段 5ms 錯開）。
 細節與主機端注意事項見 [docs/PROTOCOL.md §11](docs/PROTOCOL.md)。
+
+`FW1.1.0`（協定 v1.1）新增 `LED` / `LEDB` 狀態燈控制，既有指令的語法與回應完全沒變。
+已實機驗證（2026-10-22，同一片 uid `E6605838836C7639`）：擴充後的 94 項檢查全過（含 28 項 LED 相關檢查），
+整輪 52 秒。實測單路指令 round-trip 0.3～0.6ms、一次開 4 路 15.2ms（含 3 段 5ms 錯開）。

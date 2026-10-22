@@ -52,6 +52,8 @@ void loop() {
       gLinked = false;
       gLinkDownPending = false;
       Relay::allOff();
+      // 主機不在了，它指定的燈號已經沒有意義：回到自動顯示，才看得到藍閃。
+      Indicator::setAuto();
       Proto::onLinkDown();
     }
   } else {

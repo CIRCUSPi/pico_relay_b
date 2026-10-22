@@ -1,6 +1,6 @@
-# Pico-Relay-B USB CDC 控制協定 v1.0
+# Pico-Relay-B USB CDC 控制協定 v1.1
 
-適用韌體：`PICO-RELAY-B FW1.0.0`
+適用韌體：`PICO-RELAY-B FW1.1.0`（v1.0 的全部指令與回應格式不變，僅新增 `LED` / `LEDB`）
 硬體：Waveshare Pico-Relay-B (SKU 20218) + Raspberry Pi Pico
 用途：Orange Pi 5+ 等主機透過 USB 控制 8 路繼電器（治具 I/O）
 
@@ -88,16 +88,22 @@ ERR <碼> <名稱>     失敗
 | `STAG ms` | 0…50 | `OK ms` | 設定錯開間隔（預設 5） |
 | `BEEP` | — | `OK` | 蜂鳴 100ms |
 | `BEEP ms` | 10…5000 | `OK` | 蜂鳴指定毫秒（非阻塞） |
-| `ID` | — | `OK <model> <ch> FW<ver> <uid>` | 例：`OK PICO-RELAY-B 8 FW1.0.0 E66141040384A21F` |
+| `LED` | — | `OK AUTO` 或 `OK rrggbb` | 查詢狀態燈目前是自動顯示還是主機指定的顏色 |
+| `LED rrggbb` | `000000`…`FFFFFF`（可寫 `0xFF8000`） | `OK rrggbb` | 指定狀態燈顏色（見 §10.1） |
+| `LED OFF` | — | `OK 000000` | 狀態燈熄滅（仍算「主機指定」，不會回到自動顯示） |
+| `LED AUTO` | — | `OK AUTO` | 回到依連線／繼電器狀態自動顯示（預設） |
+| `LEDB` | — | `OK n` | 查詢狀態燈亮度 |
+| `LEDB n` | 0…255 | `OK n` | 設定狀態燈亮度（預設 24，`0` = 全暗；自動顯示與指定顏色都受影響） |
+| `ID` | — | `OK <model> <ch> FW<ver> <uid>` | 例：`OK PICO-RELAY-B 8 FW1.1.0 E66141040384A21F` |
 | `PING` | — | `OK PONG` | 存活確認／重新同步 |
-| `RST` | — | `OK hh` | 全部釋放、取消所有脈衝、`STAG`/`WDT` 回預設值 |
+| `RST` | — | `OK hh` | 全部釋放、取消所有脈衝、`STAG`/`WDT`/`LED`/`LEDB` 回預設值 |
 | `HELP` | — | 多行 `#` + `OK` | 指令摘要（給人看的） |
 
 ### 3.1 範例
 
 ```
 >> ID
-<< OK PICO-RELAY-B 8 FW1.0.0 E66141040384A21F
+<< OK PICO-RELAY-B 8 FW1.1.0 E66141040384A21F
 >> ON 1
 << OK 01
 >> ON 3
@@ -112,6 +118,14 @@ ERR <碼> <名稱>     失敗
 << OK 8E              ← CH8 已吸合，500ms 後自動釋放（沒有第二行回應）
 >> ALL 0
 << OK 00
+>> LED FF8000
+<< OK FF8000          ← 狀態燈轉橘色，之後繼電器開關不再改變燈色
+>> LED
+<< OK FF8000
+>> LEDB 80
+<< OK 80              ← 同一個顏色，亮度調到 80/255
+>> LED AUTO
+<< OK AUTO            ← 交還給韌體，燈色又跟著繼電器狀態走
 >> OPEN 1
 << ERR 1 UNKNOWN_CMD
 >> ON 9
@@ -126,11 +140,12 @@ ERR <碼> <名稱>     失敗
 |---|---|---|
 | 1 | `UNKNOWN_CMD` | 指令不認識 |
 | 2 | `BAD_ARG` | 參數數量不符（太少、太多） |
-| 3 | `RANGE` | 參數格式錯誤或超出範圍（通道、毫秒、遮罩） |
+| 3 | `RANGE` | 參數格式錯誤或超出範圍（通道、毫秒、遮罩、顏色、亮度） |
 | 4 | `TOO_LONG` | 指令行超過 48 字元 |
 | 5 | `CHECKSUM` | 帶了 `*XX` 但格式錯或不符 |
 
-錯誤時繼電器狀態**完全不變**（參數在動作之前就驗完了），板上狀態燈會閃一下紅燈。
+錯誤時繼電器狀態與狀態燈設定**完全不變**（參數在動作之前就驗完了），板上狀態燈會閃一下紅燈
+（150ms，之後回到原本該顯示的顏色，包含主機用 `LED` 指定的顏色）。
 
 ---
 
@@ -160,7 +175,7 @@ ERR <碼> <名稱>     失敗
 
 | 行 | 時機 |
 |---|---|
-| `# READY PICO-RELAY-B FW1.0.0 <uid>` | USB CDC 連線建立（主機開啟連接埠）時 |
+| `# READY PICO-RELAY-B FW1.1.0 <uid>` | USB CDC 連線建立（主機開啟連接埠）時 |
 | `# FAILSAFE IDLE` | 閒置看門狗觸發、所有通道已被釋放 |
 | `# …`（`HELP` 的輸出） | 只在下 `HELP` 時出現 |
 
@@ -266,6 +281,17 @@ class PicoRelay:
     def watchdog(self, sec):     return int(self.cmd(f"WDT {sec}"))
     def beep(self, ms=100):      self.cmd(f"BEEP {ms}")
 
+    def led(self, rgb=None) -> str:
+        """rgb 可以是 0xFF8000、'FF8000'、'OFF'、'AUTO'；None = 查詢。"""
+        if rgb is None:
+            return self.cmd("LED")
+        if isinstance(rgb, int):
+            rgb = f"{rgb:06X}"
+        return self.cmd(f"LED {rgb}")
+
+    def led_brightness(self, level) -> int:
+        return int(self.cmd(f"LEDB {level}"))
+
     def close(self):
         self.all_off()
         self.ser.close()        # 關閉 = 放掉 DTR，韌體也會自己全部釋放
@@ -277,6 +303,9 @@ if __name__ == "__main__":
     r.watchdog(10)              # 主機當掉 10 秒後自動全斷
     r.mask(0x0F)
     assert r.get() == 0x0F
+    r.led(0x0000FF)             # 測試進行中：藍燈
+    r.led("00FF00")             # PASS：綠燈
+    r.led("AUTO")               # 交還給韌體
     r.close()
 ```
 
@@ -293,7 +322,9 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", \
 
 ## 10. 板上狀態指示
 
-| 狀態燈（GP13 WS2812） | 意義 |
+狀態燈（GP13，WS2812）預設由韌體自動顯示：
+
+| 狀態燈 | 意義 |
 |---|---|
 | 藍色閃爍 | USB CDC 未連線（等主機開啟連接埠） |
 | 綠色恆亮 | 已連線、8 路全部釋放 |
@@ -303,14 +334,70 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000a", \
 
 蜂鳴器（GP6）只有兩種情形會響：開機自檢 60ms，以及主機下 `BEEP`。
 
+### 10.1 主機指定顏色（`LED` / `LEDB`）
+
+治具常常需要一顆給操作員看的燈（測試中／PASS／FAIL），板上這顆就夠用。
+`LED rrggbb` 之後，狀態燈不再跟著繼電器狀態走，固定顯示主機要的顏色，直到 `LED AUTO`。
+
+**優先序（上面的蓋過下面的）：**
+
+| 優先 | 顯示 | 說明 |
+|---|---|---|
+| 1 | 紅色閃一下 | 指令錯誤（150ms，之後回到指定顏色） |
+| 2 | 紅色閃爍 | 閒置看門狗已觸發 |
+| 3 | 藍色閃爍 | USB CDC 未連線 |
+| 4 | 主機指定的顏色 | `LED rrggbb` / `LED OFF` 設定的值 |
+| 5 | 黃／綠恆亮 | 自動顯示（`LED AUTO`，預設） |
+
+也就是說**失效保護與斷線的警示永遠看得到**：否則治具出事時，燈還停在主機設的「測試中」顏色，
+現場看不出異常。這是刻意的設計，不是可以關掉的選項。
+
+幾個實務上要知道的點：
+
+- 顏色是 sRGB 的 `rrggbb`，硬體是 WS2812（`NEO_GRB`），韌體已處理通道順序，主機照常寫 `FF0000` = 紅。
+- 亮度 `LEDB` 是乘上去的整體縮放（預設 24/255，WS2812 全亮很刺眼）。縮放後若不足 1 就會變成 0，
+  所以暗色 + 低亮度可能完全看不到，例如 `LED 0F0F0F` 配 `LEDB 24` 就是全暗。要穩的話用飽和色。
+- `LED OFF` 和 `LED AUTO` 不一樣：前者是「主機要它暗著」，後者是「交還給韌體」。
+- **USB 斷線（DTR 放掉）會自動回到 `LED AUTO`**，和繼電器全部釋放同時發生 —— 主機不在了，
+  它指定的燈號也沒有意義，而且這樣才看得到藍閃。重新連上後要自己重設顏色。
+- 閒置看門狗觸發**不會**清掉指定的顏色：紅閃期間蓋過它，解除後顏色自己回來。
+- `RST` 會把燈恢復成 `LED AUTO` + 預設亮度。
+
+建議的治具用法（配色隨意，這是常見的一組）：
+
+```
+>> LED 0000FF      # 測試進行中
+>> LED 00FF00      # PASS
+>> LED FF0000      # FAIL（和錯誤閃紅不衝突，閃完就回來）
+>> LED FFFF00      # 等待人工操作
+>> LED AUTO        # 收工，交還給韌體
+```
+
 ---
 
 ## 11. 版本與相容性
 
-- 本文件對應 `FW1.0.0`，可由 `ID` 指令確認。
+- 本文件對應 `FW1.1.0`，可由 `ID` 指令確認。
+- 相對於 `FW1.0.0`（協定 v1.0）只新增了 `LED` / `LEDB` 兩個指令，既有指令的語法與回應完全沒變，
+  v1.0 寫好的主機程式不需要任何修改。`RST` 多做的事（燈回預設）不影響回應格式。
 - 相容性約定：同一個 major 版本只會**新增**指令或**新增** `#` 資訊行，不會改變既有指令的語法與回應格式。主機端解析時請忽略不認識的 `#` 行。
 
-### 驗證狀態（2026-10-21）
+### 驗證狀態
+
+#### `FW1.1.0`（2026-10-22）
+
+`FW1.1.0` 已在 Pico-Relay-B (SKU 20218) + Raspberry Pi Pico（uid `E6605838836C7639`，與 v1.0 同一片）
+實機跑完 `tools/hwtest.py`：**94 項檢查全數通過**（整輪 52 秒），相對 v1.0 新增的 28 項 LED 檢查涵蓋
+
+- `LED` 查詢／指定／`OFF`／`AUTO` 的回應格式，四色目視（紅、綠、藍、白）
+- `LEDB` 亮度 24 → 120 → 6 → 24 目視
+- 優先序：指定顏色期間吸合繼電器，燈色不變（不會跳成黃色）
+- 錯誤參數（`LED 1000000` / `LED GG0000` / 參數過多 / `LEDB 256`）皆回 `ERR`，且顏色與亮度不變
+- USB 斷線後自動回 `LED AUTO`、`RST` 後回 `AUTO` + 預設亮度
+
+既有指令的回應與時序與 v1.0 一致（單路 round-trip 0.3～0.6ms、一次開 4 路 15.2ms）。
+
+#### `FW1.0.0`（2026-10-21）
 
 `FW1.0.0` 已在 Pico-Relay-B (SKU 20218) + Raspberry Pi Pico（uid `E6605838836C7639`）實機跑完整輪測試，
 66 項檢查全數通過，涵蓋：

@@ -104,6 +104,7 @@ void help() {
     "# MASK hh | ALL 0|1 | GET             whole bank, bit0=CH1",
     "# PULSE n ms                          one-shot 10..60000ms, non-blocking",
     "# WDT [sec] | STAG [ms] | BEEP [ms]   idle failsafe / ON spacing / buzzer",
+    "# LED [rrggbb|AUTO|OFF] | LEDB [n]    status LED color / brightness 0..255",
     "# ID | PING | RST | HELP",
     "# reply: OK hh (relay mask) | OK <value> | ERR <code> <name>",
   };
@@ -203,6 +204,8 @@ void dispatch(uint8_t argc, char **argv) {
     }
     Relay::allOff();
     Relay::setStagger(RELAY_STAGGER_MS);
+    Indicator::setAuto();
+    Indicator::setBrightness(LED_BRIGHTNESS);
     gIdleSec = PROTO_IDLE_TIMEOUT_SEC;
     return okMask();
   }
@@ -242,6 +245,40 @@ void dispatch(uint8_t argc, char **argv) {
     }
     Indicator::beep((uint16_t)v);
     return emit("OK");
+  }
+
+  // 狀態燈顏色：主機拿板上的燈當自己的指示（例如治具測試中／PASS／FAIL）。
+  // 失效保護紅閃、未連線藍閃與錯誤閃紅仍然蓋過指定顏色，見 indicator.h。
+  if (!strcasecmp(cmd, "LED")) {
+    if (argc == 2) {
+      if (!strcasecmp(argv[1], "AUTO")) {
+        Indicator::setAuto();
+      } else if (!strcasecmp(argv[1], "OFF")) {
+        Indicator::setColor(0);
+      } else if (parseU32(argv[1], &v, 16) && v <= 0xFFFFFFu) {
+        Indicator::setColor(v);
+      } else {
+        return fail(3, "RANGE");
+      }
+    } else if (argc != 1) {
+      return fail(2, "BAD_ARG");
+    }
+    if (Indicator::isAuto()) {
+      return emit("OK AUTO");
+    }
+    return emitf("OK %06lX", (unsigned long)Indicator::color());
+  }
+
+  if (!strcasecmp(cmd, "LEDB")) {
+    if (argc == 2) {
+      if (!parseU32(argv[1], &v, 10) || v > 255) {
+        return fail(3, "RANGE");
+      }
+      Indicator::setBrightness((uint8_t)v);
+    } else if (argc != 1) {
+      return fail(2, "BAD_ARG");
+    }
+    return emitf("OK %u", Indicator::brightness());
   }
 
   if (!strcasecmp(cmd, "ID")) {
